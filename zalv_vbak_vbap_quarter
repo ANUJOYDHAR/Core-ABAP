@@ -1,0 +1,121 @@
+*&---------------------------------------------------------------------*
+*& Report ZALV_VBAK_VBAP_QUARTER  & MONTH
+*&---------------------------------------------------------------------*
+REPORT zalv_vbak_vbap_quarter.
+
+TABLES: vbak, vbap.
+
+*--------------------------------------------------------------------*
+* TYPES
+*--------------------------------------------------------------------*
+TYPES: BEGIN OF ty_merged,
+         vbeln   TYPE vbak-vbeln,   " Sales Document
+         erdat   TYPE vbak-erdat,   " Order Date
+         netwr   TYPE vbak-netwr,   " Net Value
+         posnr   TYPE vbap-posnr,   " Item No
+         matnr   TYPE vbap-matnr,   " Material
+         arktx   TYPE vbap-arktx,   " Description
+         kwmeng  TYPE vbap-kwmeng,  " Order Qty
+         quarter TYPE c LENGTH 2,   " Q1-Q4
+         Month   TYPE c LENGTH 20,    " Month
+       END OF ty_merged.
+
+*--------------------------------------------------------------------*
+* DATA
+*--------------------------------------------------------------------*
+DATA: it_merged TYPE STANDARD TABLE OF ty_merged,
+      wa_merged TYPE ty_merged.
+
+
+
+DATA: it_fieldcat TYPE slis_t_fieldcat_alv,
+      wa_fieldcat TYPE slis_fieldcat_alv.
+
+
+DATA: it_month TYPE TABLE OF t247,
+      wa_month LIKE LINE OF it_month.
+
+*--------------------------------------------------------------------*
+* SELECTION SCREEN
+*--------------------------------------------------------------------*
+SELECT-OPTIONS s_vbeln FOR vbak-vbeln OBLIGATORY DEFAULT '1' TO '5'.
+
+*--------------------------------------------------------------------*
+* START-OF-SELECTION
+*--------------------------------------------------------------------*
+START-OF-SELECTION.
+
+  " Fetch header + item data using JOIN
+  SELECT a~vbeln, a~erdat, a~netwr,
+         b~posnr, b~matnr, b~arktx, b~kwmeng
+    FROM vbak AS a
+    INNER JOIN vbap AS b
+      ON a~vbeln = b~vbeln
+    INTO TABLE @DATA(it_data)
+    WHERE a~vbeln IN @s_vbeln.
+
+
+  IF it_data IS INITIAL.
+    MESSAGE 'No sales orders found!' TYPE 'I'.
+    EXIT.
+  ENDIF.
+
+
+  CALL FUNCTION 'MONTH_NAMES_GET'
+    TABLES
+      month_names           = it_month
+    EXCEPTIONS
+      month_names_not_found = 1
+      OTHERS                = 2.
+
+  " Add quarter column
+  LOOP AT it_data INTO DATA(wa_data).
+    wa_merged = wa_data.
+    DATA(lvv_month) = wa_data-erdat+4(2). " Extract MM from YYYYMMDD int variable lvv_month
+    CASE wa_data-erdat+4(2). " Extract MM from YYYYMMDD
+      WHEN '01' OR '02' OR '03'.
+        wa_merged-quarter = 'Q1'.
+      WHEN '04' OR '05' OR '06'.
+        wa_merged-quarter = 'Q2'.
+      WHEN '07' OR '08' OR '09'.
+        wa_merged-quarter = 'Q3'.
+      WHEN '10' OR '11' OR '12'.
+        wa_merged-quarter = 'Q4'.
+    ENDCASE.
+    " Get Month Name from T247 (where MNR = month number)
+    READ TABLE it_month INTO wa_month WITH KEY mnr = lvv_month.
+    IF sy-subrc = 0.
+      wa_merged-month = wa_month-ltx.  " Full localized month name
+    ELSE.
+      wa_merged-month = lvv_month.      " Fallback (e.g. '01')
+    ENDIF.
+
+    APPEND wa_merged TO it_merged.
+  ENDLOOP.
+
+*--------------------------------------------------------------------*
+* Build field catalog
+*--------------------------------------------------------------------*
+  CLEAR it_fieldcat.
+
+  wa_fieldcat-fieldname = 'VBELN'.  wa_fieldcat-seltext_m = 'Sales Doc'. APPEND wa_fieldcat TO it_fieldcat.
+  wa_fieldcat-fieldname = 'ERDAT'.  wa_fieldcat-seltext_m = 'Order Date'. APPEND wa_fieldcat TO it_fieldcat.
+  wa_fieldcat-fieldname = 'NETWR'.  wa_fieldcat-seltext_m = 'Net Value'. APPEND wa_fieldcat TO it_fieldcat.
+  wa_fieldcat-fieldname = 'POSNR'.  wa_fieldcat-seltext_m = 'Item No'. APPEND wa_fieldcat TO it_fieldcat.
+  wa_fieldcat-fieldname = 'MATNR'.  wa_fieldcat-seltext_m = 'Material'. APPEND wa_fieldcat TO it_fieldcat.
+  wa_fieldcat-fieldname = 'ARKTX'.  wa_fieldcat-seltext_m = 'Description'. APPEND wa_fieldcat TO it_fieldcat.
+  wa_fieldcat-fieldname = 'KWMENG'. wa_fieldcat-seltext_m = 'Qty'. APPEND wa_fieldcat TO it_fieldcat.
+  wa_fieldcat-fieldname = 'QUARTER'. wa_fieldcat-seltext_m = 'Quarter'. APPEND wa_fieldcat TO it_fieldcat.
+  wa_fieldcat-fieldname = 'Month'. wa_fieldcat-seltext_m = 'Month Name'. APPEND wa_fieldcat TO it_fieldcat.
+
+*--------------------------------------------------------------------*
+* Display ALV
+*--------------------------------------------------------------------*
+  CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+    EXPORTING
+      it_fieldcat   = it_fieldcat
+    TABLES
+      t_outtab      = it_merged
+    EXCEPTIONS
+      program_error = 1
+      OTHERS        = 2.
